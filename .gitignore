@@ -1,0 +1,14 @@
+node_modules/
+dist/
+.env
+.env.local
+*.log
+.DS_Store
+.idea/
+.vscode/
+*.tsbuildinfo
+
+# OCR artifacts
+samples/private/
+output/
+tmp/
