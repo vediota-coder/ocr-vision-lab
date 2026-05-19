@@ -3,11 +3,16 @@ import type { OcrImage, OcrProvider } from "./types.js";
 
 export class OpenAIProvider implements OcrProvider {
   readonly name = "gpt" as const;
-  private client = new OpenAI();
+  private client?: OpenAI;
   private model = process.env.OPENAI_MODEL ?? "gpt-4o";
 
+  private getClient(): OpenAI {
+    if (!this.client) this.client = new OpenAI();
+    return this.client;
+  }
+
   async ocr(image: OcrImage, prompt: string): Promise<string> {
-    const response = await this.client.chat.completions.create({
+    const response = await this.getClient().chat.completions.create({
       model: this.model,
       max_tokens: 4096,
       messages: [
