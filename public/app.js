@@ -113,19 +113,43 @@ form.addEventListener("submit", async (e) => {
 
   const es = new EventSource(`/api/jobs/${jobId}/events`);
   let processed = 0;
+  const rows = new Map();
+
+  function ensureRow(idx, file) {
+    if (rows.has(idx)) return rows.get(idx);
+    const li = document.createElement("li");
+    li.dataset.idx = idx;
+    li.innerHTML = `<span>${file}</span><span class="state">старт</span>`;
+    logEl.appendChild(li);
+    logEl.scrollTop = logEl.scrollHeight;
+    rows.set(idx, li);
+    return li;
+  }
+  function setState(idx, file, text, klass) {
+    const li = ensureRow(idx, file);
+    const s = li.querySelector(".state");
+    s.textContent = text;
+    s.className = `state ${klass || ""}`;
+  }
+
   es.onmessage = (msg) => {
     const ev = JSON.parse(msg.data);
     if (ev.type === "start") {
-      statusEl.textContent = `Старт: ${ev.totalPages} страниц`;
-    } else if (ev.type === "page") {
+      statusEl.textContent = `Старт: ${ev.totalPages} страниц (параллельно)`;
+    } else if (ev.type === "page-start") {
+      ensureRow(ev.pageIndex, ev.file);
+    } else if (ev.type === "page-claude") {
+      setState(ev.pageIndex, ev.file, "claude ✓", "step");
+    } else if (ev.type === "page-gpt") {
+      setState(ev.pageIndex, ev.file, "gpt ✓", "step");
+    } else if (ev.type === "page-merge") {
+      setState(ev.pageIndex, ev.file, "сверка…", "step");
+    } else if (ev.type === "page-done") {
       processed++;
       bar.style.width = `${(processed / (total + 1)) * 100}%`;
-      const li = document.createElement("li");
       const agree = Math.round((ev.agreement ?? 0) * 100);
       const cls = agree >= 85 ? "agree" : agree >= 60 ? "agree low" : "agree bad";
-      li.innerHTML = `<span>${ev.file}</span><span class="${cls}">${agree}%</span>`;
-      logEl.appendChild(li);
-      logEl.scrollTop = logEl.scrollHeight;
+      setState(ev.pageIndex, ev.file, `${agree}%`, cls);
       statusEl.textContent = `${processed}/${total} обработано`;
     } else if (ev.type === "filter") {
       statusEl.textContent = "Удаляю повторяющийся мусор…";

@@ -7,21 +7,33 @@ import { Buffer } from "node:buffer";
 import Fastify from "fastify";
 import multipart from "@fastify/multipart";
 import fastifyStatic from "@fastify/static";
+import pLimit from "p-limit";
 
 import { verifyImage, type VerifiedResult } from "../pipeline/verify.js";
 import { stripBoilerplate } from "../pipeline/filter.js";
 import { buildVerifiedPdf, type RenderPage } from "../pipeline/pdf.js";
 import { buildVerifiedDocx } from "../pipeline/docx.js";
+import { resizeForOcr } from "../pipeline/resize.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = join(__dirname, "..", "..", "public");
 
 const SUPPORTED_EXT = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp"]);
+const CONCURRENCY = Number(process.env.OCR_CONCURRENCY ?? 4);
 
 type OutputFormat = "pdf" | "docx";
 
 interface JobEvent {
-  type: "start" | "page" | "filter" | "done" | "error";
+  type:
+    | "start"
+    | "page-start"
+    | "page-claude"
+    | "page-gpt"
+    | "page-merge"
+    | "page-done"
+    | "filter"
+    | "done"
+    | "error";
   totalPages?: number;
   pageIndex?: number;
   file?: string;
@@ -59,26 +71,49 @@ async function runJob(
   const job = jobs.get(jobId)!;
   emit(job, { type: "start", totalPages: files.length });
 
-  const results: VerifiedResult[] = [];
+  const resizeLimit = pLimit(Math.max(2, CONCURRENCY * 2));
+  const ocrLimit = pLimit(CONCURRENCY);
+
+  const results: VerifiedResult[] = new Array(files.length);
+  const resizedPaths: string[] = new Array(files.length);
+
   try {
-    for (let i = 0; i < files.length; i++) {
-      const f = files[i];
-      const verified = await verifyImage(f.name, f.path, userPrompt);
-      results.push(verified);
-      emit(job, {
-        type: "page",
-        pageIndex: i,
-        file: f.name,
-        agreement: verified.agreement,
-      });
-    }
+    await Promise.all(
+      files.map((f, i) =>
+        ocrLimit(async () => {
+          emit(job, { type: "page-start", pageIndex: i, file: f.name });
+
+          const resized = await resizeLimit(() =>
+            resizeForOcr(f.path, job.workDir).catch(() => f.path),
+          );
+          resizedPaths[i] = resized;
+
+          const verified = await verifyImage(f.name, resized, userPrompt, {
+            onClaude: () =>
+              emit(job, { type: "page-claude", pageIndex: i, file: f.name }),
+            onGpt: () =>
+              emit(job, { type: "page-gpt", pageIndex: i, file: f.name }),
+            onMerge: () =>
+              emit(job, { type: "page-merge", pageIndex: i, file: f.name }),
+          });
+
+          results[i] = verified;
+          emit(job, {
+            type: "page-done",
+            pageIndex: i,
+            file: f.name,
+            agreement: verified.agreement,
+          });
+        }),
+      ),
+    );
 
     emit(job, { type: "filter" });
     const cleaned = await stripBoilerplate(results, userPrompt);
 
     const renderPages: RenderPage[] = cleaned.map((r, i) => ({
       ...r,
-      imagePath: files[i].path,
+      imagePath: resizedPaths[i] || files[i].path,
     }));
 
     const buffer =
@@ -212,4 +247,4 @@ app.get("/api/jobs/:id/output", async (req, reply) => {
 const port = Number(process.env.PORT ?? 8082);
 app
   .listen({ port, host: "0.0.0.0" })
-  .then(() => app.log.info(`UI: http://localhost:${port}/`));
+  .then(() => app.log.info(`UI: http://localhost:${port}/ (concurrency=${CONCURRENCY})`));

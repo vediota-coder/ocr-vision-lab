@@ -27,16 +27,43 @@ interface VerifyResponse {
   agreement: number;
 }
 
+export interface VerifyHooks {
+  onClaude?: () => void;
+  onGpt?: () => void;
+  onMerge?: () => void;
+}
+
 export async function verifyImage(
   fileLabel: string,
   imagePath: string,
   userInstruction = "",
+  hooks: VerifyHooks = {},
 ): Promise<VerifiedResult> {
   const ocrPrompt = buildOcrPrompt(userInstruction);
   const [claudeText, gptText] = await Promise.all([
-    claude.ocr(imagePath, ocrPrompt).catch((e) => `[claude error: ${e.message}]`),
-    openai.ocr(imagePath, ocrPrompt).catch((e) => `[gpt error: ${e.message}]`),
+    claude
+      .ocr(imagePath, ocrPrompt)
+      .then((t) => {
+        hooks.onClaude?.();
+        return t;
+      })
+      .catch((e) => {
+        hooks.onClaude?.();
+        return `[claude error: ${e.message}]`;
+      }),
+    openai
+      .ocr(imagePath, ocrPrompt)
+      .then((t) => {
+        hooks.onGpt?.();
+        return t;
+      })
+      .catch((e) => {
+        hooks.onGpt?.();
+        return `[gpt error: ${e.message}]`;
+      }),
   ]);
+
+  hooks.onMerge?.();
 
   const extraInstruction = userInstruction.trim()
     ? `\nДополнительные инструкции пользователя (учти при выборе финального текста):\n${userInstruction}\n`

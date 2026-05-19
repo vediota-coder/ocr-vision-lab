@@ -144,6 +144,8 @@ textarea:focus { outline: 2px solid #007aff; border-color: transparent; }
 .log .agree { color: #34c759; font-weight: 600; }
 .log .agree.low { color: #ff9500; }
 .log .agree.bad { color: #ff3b30; }
+.log .state { font-size: 11px; color: #888; }
+.log .state.step { color: #007aff; }
 .download {
   display: inline-block;
   margin-top: 16px;
