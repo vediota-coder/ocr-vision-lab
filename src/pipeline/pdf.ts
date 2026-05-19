@@ -1,14 +1,14 @@
+import { readFile } from "node:fs/promises";
 import PDFDocument from "pdfkit";
 import { Buffer } from "node:buffer";
 import type { VerifiedResult } from "./verify.js";
 
-export interface PdfPageInput extends VerifiedResult {
-  imageBuffer: Buffer;
-  mediaType: string;
+export interface RenderPage extends VerifiedResult {
+  imagePath: string;
 }
 
-export async function buildVerifiedPdf(pages: PdfPageInput[]): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
+export async function buildVerifiedPdf(pages: RenderPage[]): Promise<Buffer> {
+  return new Promise(async (resolve, reject) => {
     const doc = new PDFDocument({
       size: "A4",
       margin: 40,
@@ -37,7 +37,8 @@ export async function buildVerifiedPdf(pages: PdfPageInput[]): Promise<Buffer> {
       );
     doc.fillColor("#000");
 
-    pages.forEach((page, i) => {
+    for (let i = 0; i < pages.length; i++) {
+      const page = pages[i];
       doc.addPage();
 
       doc
@@ -48,14 +49,12 @@ export async function buildVerifiedPdf(pages: PdfPageInput[]): Promise<Buffer> {
         .font("Helvetica")
         .fontSize(9)
         .fillColor("#666")
-        .text(
-          `agreement: ${(page.agreement * 100).toFixed(0)}%`,
-          { continued: false },
-        );
+        .text(`agreement: ${(page.agreement * 100).toFixed(0)}%`);
       doc.fillColor("#000");
       doc.moveDown(0.5);
 
-      const pageWidth = doc.page.width - doc.page.margins.left - doc.page.margins.right;
+      const pageWidth =
+        doc.page.width - doc.page.margins.left - doc.page.margins.right;
       const previewWidth = pageWidth * 0.4;
       const previewX = doc.page.margins.left;
       const previewY = doc.y;
@@ -63,7 +62,8 @@ export async function buildVerifiedPdf(pages: PdfPageInput[]): Promise<Buffer> {
       const textWidth = pageWidth - previewWidth - 16;
 
       try {
-        doc.image(page.imageBuffer, previewX, previewY, {
+        const buf = await readFile(page.imagePath);
+        doc.image(buf, previewX, previewY, {
           fit: [previewWidth, 220],
           align: "center",
         });
@@ -88,9 +88,7 @@ export async function buildVerifiedPdf(pages: PdfPageInput[]): Promise<Buffer> {
       doc
         .font("Helvetica")
         .fontSize(9)
-        .text(page.final || "(пусто)", textX, doc.y + 2, {
-          width: textWidth,
-        });
+        .text(page.final || "(пусто)", textX, doc.y + 2, { width: textWidth });
 
       doc.moveDown(0.5);
       if (page.notes && page.notes.trim()) {
@@ -98,7 +96,7 @@ export async function buildVerifiedPdf(pages: PdfPageInput[]): Promise<Buffer> {
           .font("Helvetica-Bold")
           .fontSize(9)
           .fillColor("#555")
-          .text("Verification notes", { continued: false });
+          .text("Verification notes");
         doc
           .font("Helvetica")
           .fontSize(8)
@@ -106,7 +104,7 @@ export async function buildVerifiedPdf(pages: PdfPageInput[]): Promise<Buffer> {
           .text(page.notes)
           .fillColor("#000");
       }
-    });
+    }
 
     doc.end();
   });

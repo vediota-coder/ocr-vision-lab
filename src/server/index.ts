@@ -1,28 +1,27 @@
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { dirname, extname, join } from "node:path";
+import { mkdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { Buffer } from "node:buffer";
 import Fastify from "fastify";
 import multipart from "@fastify/multipart";
 import fastifyStatic from "@fastify/static";
-import "dotenv/config";
 
 import { verifyImage, type VerifiedResult } from "../pipeline/verify.js";
-import { buildVerifiedPdf, type PdfPageInput } from "../pipeline/pdf.js";
-import type { SupportedMediaType } from "../providers/types.js";
+import { stripBoilerplate } from "../pipeline/filter.js";
+import { buildVerifiedPdf, type RenderPage } from "../pipeline/pdf.js";
+import { buildVerifiedDocx } from "../pipeline/docx.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = join(__dirname, "..", "..", "public");
 
-const MIME_BY_EXT: Record<string, SupportedMediaType> = {
-  ".jpg": "image/jpeg",
-  ".jpeg": "image/jpeg",
-  ".png": "image/png",
-  ".gif": "image/gif",
-  ".webp": "image/webp",
-};
+const SUPPORTED_EXT = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp"]);
+
+type OutputFormat = "pdf" | "docx";
 
 interface JobEvent {
-  type: "start" | "page" | "done" | "error";
+  type: "start" | "page" | "filter" | "done" | "error";
   totalPages?: number;
   pageIndex?: number;
   file?: string;
@@ -34,8 +33,9 @@ interface JobEvent {
 interface Job {
   events: JobEvent[];
   subscribers: Set<(ev: JobEvent) => void>;
-  pdf?: Buffer;
+  output?: { buffer: Buffer; format: OutputFormat };
   failed?: string;
+  workDir: string;
 }
 
 const jobs = new Map<string, Job>();
@@ -45,26 +45,26 @@ function emit(job: Job, ev: JobEvent): void {
   for (const s of job.subscribers) s(ev);
 }
 
+interface UploadedFile {
+  name: string;
+  path: string;
+}
+
 async function runJob(
   jobId: string,
-  files: { name: string; buffer: Buffer; mediaType: SupportedMediaType }[],
+  files: UploadedFile[],
+  format: OutputFormat,
+  userPrompt: string,
 ): Promise<void> {
   const job = jobs.get(jobId)!;
   emit(job, { type: "start", totalPages: files.length });
 
-  const results: PdfPageInput[] = [];
+  const results: VerifiedResult[] = [];
   try {
     for (let i = 0; i < files.length; i++) {
       const f = files[i];
-      const verified: VerifiedResult = await verifyImage(f.name, {
-        base64: f.buffer.toString("base64"),
-        mediaType: f.mediaType,
-      });
-      results.push({
-        ...verified,
-        imageBuffer: f.buffer,
-        mediaType: f.mediaType,
-      });
+      const verified = await verifyImage(f.name, f.path, userPrompt);
+      results.push(verified);
       emit(job, {
         type: "page",
         pageIndex: i,
@@ -73,20 +73,33 @@ async function runJob(
       });
     }
 
-    const pdf = await buildVerifiedPdf(results);
-    job.pdf = pdf;
+    emit(job, { type: "filter" });
+    const cleaned = await stripBoilerplate(results, userPrompt);
+
+    const renderPages: RenderPage[] = cleaned.map((r, i) => ({
+      ...r,
+      imagePath: files[i].path,
+    }));
+
+    const buffer =
+      format === "docx"
+        ? await buildVerifiedDocx(renderPages)
+        : await buildVerifiedPdf(renderPages);
+    job.output = { buffer, format };
     emit(job, { type: "done", jobId });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     job.failed = msg;
     emit(job, { type: "error", message: msg });
+  } finally {
+    rm(job.workDir, { recursive: true, force: true }).catch(() => undefined);
   }
 }
 
-const app = Fastify({ logger: true, bodyLimit: 512 * 1024 * 1024 });
+const app = Fastify({ logger: true, bodyLimit: 1024 * 1024 * 1024 });
 
 await app.register(multipart, {
-  limits: { fileSize: 50 * 1024 * 1024, files: 200 },
+  limits: { fileSize: 50 * 1024 * 1024, files: 2000 },
 });
 
 await app.register(fastifyStatic, {
@@ -95,32 +108,44 @@ await app.register(fastifyStatic, {
 });
 
 app.post("/api/jobs", async (req, reply) => {
-  const files: { name: string; buffer: Buffer; mediaType: SupportedMediaType }[] = [];
+  const jobId = randomUUID();
+  const workDir = join(tmpdir(), `ocr-job-${jobId}`);
+  await mkdir(workDir, { recursive: true });
+
+  const files: UploadedFile[] = [];
+  let format: OutputFormat = "pdf";
+  let userPrompt = "";
 
   for await (const part of req.parts()) {
     if (part.type === "file") {
       const ext = extname(part.filename).toLowerCase();
-      const mediaType = MIME_BY_EXT[ext];
-      if (!mediaType) continue;
+      if (!SUPPORTED_EXT.has(ext)) {
+        for await (const _ of part.file) void _;
+        continue;
+      }
+      const safeName = `${files.length}-${part.filename.replace(/[\/\\]/g, "_")}`;
+      const dest = join(workDir, safeName);
       const chunks: Buffer[] = [];
       for await (const chunk of part.file) chunks.push(chunk as Buffer);
-      files.push({
-        name: part.filename,
-        buffer: Buffer.concat(chunks),
-        mediaType,
-      });
+      await writeFile(dest, Buffer.concat(chunks));
+      files.push({ name: part.filename, path: dest });
+    } else if (part.fieldname === "format") {
+      const v = part.value;
+      if (typeof v === "string" && (v === "pdf" || v === "docx")) format = v;
+    } else if (part.fieldname === "prompt") {
+      if (typeof part.value === "string") userPrompt = part.value;
     }
   }
 
   if (files.length === 0) {
+    await rm(workDir, { recursive: true, force: true });
     return reply.code(400).send({ error: "No supported images uploaded" });
   }
 
-  const jobId = randomUUID();
-  jobs.set(jobId, { events: [], subscribers: new Set() });
-  runJob(jobId, files).catch((e) => app.log.error(e));
+  jobs.set(jobId, { events: [], subscribers: new Set(), workDir });
+  runJob(jobId, files, format, userPrompt).catch((e) => app.log.error(e));
 
-  return { jobId, total: files.length };
+  return { jobId, total: files.length, format };
 });
 
 app.get("/api/jobs/:id/events", (req, reply) => {
@@ -143,7 +168,7 @@ app.get("/api/jobs/:id/events", (req, reply) => {
 
   for (const ev of job.events) send(ev);
 
-  if (job.pdf || job.failed) {
+  if (job.output || job.failed) {
     reply.raw.end();
     return;
   }
@@ -162,20 +187,26 @@ app.get("/api/jobs/:id/events", (req, reply) => {
   job.subscribers.add(flushAndClose);
 });
 
-app.get("/api/jobs/:id/pdf", async (req, reply) => {
+app.get("/api/jobs/:id/output", async (req, reply) => {
   const { id } = req.params as { id: string };
   const job = jobs.get(id);
   if (!job) return reply.code(404).send({ error: "Job not found" });
   if (job.failed) return reply.code(500).send({ error: job.failed });
-  if (!job.pdf) return reply.code(425).send({ error: "Not ready" });
+  if (!job.output) return reply.code(425).send({ error: "Not ready" });
+
+  const { buffer, format } = job.output;
+  const mime =
+    format === "docx"
+      ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+      : "application/pdf";
 
   reply
-    .header("Content-Type", "application/pdf")
+    .header("Content-Type", mime)
     .header(
       "Content-Disposition",
-      `attachment; filename="ocr-${id.slice(0, 8)}.pdf"`,
+      `attachment; filename="ocr-${id.slice(0, 8)}.${format}"`,
     )
-    .send(job.pdf);
+    .send(buffer);
 });
 
 const port = Number(process.env.PORT ?? 8082);

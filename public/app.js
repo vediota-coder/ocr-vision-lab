@@ -6,6 +6,7 @@ const fileListEl = document.getElementById("file-list");
 const submitBtn = document.getElementById("submit-btn");
 const form = document.getElementById("upload-form");
 const dropzone = document.getElementById("dropzone");
+const promptEl = document.getElementById("prompt");
 const progressCard = document.getElementById("progress-card");
 const bar = document.getElementById("bar");
 const statusEl = document.getElementById("status");
@@ -13,7 +14,6 @@ const logEl = document.getElementById("log");
 const downloadEl = document.getElementById("download");
 
 let selected = [];
-
 const ACCEPTED = /\.(png|jpe?g|gif|webp)$/i;
 
 function setFiles(files) {
@@ -85,6 +85,10 @@ form.addEventListener("submit", async (e) => {
   e.preventDefault();
   if (selected.length === 0) return;
 
+  const format =
+    document.querySelector('input[name="format"]:checked')?.value || "pdf";
+  const userPrompt = (promptEl.value || "").trim();
+
   submitBtn.disabled = true;
   progressCard.hidden = false;
   logEl.innerHTML = "";
@@ -93,11 +97,14 @@ form.addEventListener("submit", async (e) => {
   bar.style.width = "0%";
 
   const fd = new FormData();
+  fd.append("format", format);
+  if (userPrompt) fd.append("prompt", userPrompt);
   for (const f of selected) fd.append("files", f, f.webkitRelativePath || f.name);
 
   const res = await fetch("/api/jobs", { method: "POST", body: fd });
   if (!res.ok) {
-    statusEl.textContent = `Ошибка загрузки: ${res.status}`;
+    const body = await res.text().catch(() => "");
+    statusEl.textContent = `Ошибка загрузки: ${res.status} ${body}`;
     submitBtn.disabled = false;
     return;
   }
@@ -112,7 +119,7 @@ form.addEventListener("submit", async (e) => {
       statusEl.textContent = `Старт: ${ev.totalPages} страниц`;
     } else if (ev.type === "page") {
       processed++;
-      bar.style.width = `${(processed / total) * 100}%`;
+      bar.style.width = `${(processed / (total + 1)) * 100}%`;
       const li = document.createElement("li");
       const agree = Math.round((ev.agreement ?? 0) * 100);
       const cls = agree >= 85 ? "agree" : agree >= 60 ? "agree low" : "agree bad";
@@ -120,10 +127,14 @@ form.addEventListener("submit", async (e) => {
       logEl.appendChild(li);
       logEl.scrollTop = logEl.scrollHeight;
       statusEl.textContent = `${processed}/${total} обработано`;
+    } else if (ev.type === "filter") {
+      statusEl.textContent = "Удаляю повторяющийся мусор…";
+      bar.style.width = `${(total / (total + 1)) * 100}%`;
     } else if (ev.type === "done") {
       bar.style.width = "100%";
-      statusEl.textContent = "Готово";
-      downloadEl.href = `/api/jobs/${jobId}/pdf`;
+      statusEl.textContent = `Готово (${format.toUpperCase()})`;
+      downloadEl.href = `/api/jobs/${jobId}/output`;
+      downloadEl.textContent = `Скачать ${format.toUpperCase()}`;
       downloadEl.hidden = false;
       es.close();
       submitBtn.disabled = false;

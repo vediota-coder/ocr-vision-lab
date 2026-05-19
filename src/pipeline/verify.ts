@@ -1,7 +1,5 @@
-import Anthropic from "@anthropic-ai/sdk";
-import { ClaudeProvider } from "../providers/claude.js";
+import { ClaudeProvider, claudeJson } from "../providers/claude.js";
 import { OpenAIProvider } from "../providers/openai.js";
-import type { OcrImage } from "../providers/types.js";
 
 export interface VerifiedResult {
   file: string;
@@ -12,11 +10,16 @@ export interface VerifiedResult {
   agreement: number;
 }
 
-const OCR_PROMPT =
+const BASE_OCR_PROMPT =
   "Извлеки ВЕСЬ текст с изображения. Сохрани структуру (таблицы, колонки, заголовки, списки). Только текст, без комментариев и markdown-обёртки.";
 
-const VERIFY_SYSTEM =
-  "Ты редактор-корректор OCR. Тебе дают два независимых распознавания одного изображения от разных моделей. Твоя задача — выдать финальный, максимально точный текст, объединив сильные стороны обоих результатов и исправив явные ошибки распознавания. Не дописывай ничего, чего нет в исходниках.";
+const claude = new ClaudeProvider();
+const openai = new OpenAIProvider();
+
+function buildOcrPrompt(userInstruction: string): string {
+  if (!userInstruction.trim()) return BASE_OCR_PROMPT;
+  return `${BASE_OCR_PROMPT}\n\nДополнительные инструкции пользователя:\n${userInstruction}`;
+}
 
 interface VerifyResponse {
   final_text: string;
@@ -24,26 +27,24 @@ interface VerifyResponse {
   agreement: number;
 }
 
-const claude = new ClaudeProvider();
-const openai = new OpenAIProvider();
-const verifyModel = process.env.ANTHROPIC_MODEL ?? "claude-opus-4-7";
-
-let _anthropic: Anthropic | undefined;
-function getAnthropic(): Anthropic {
-  if (!_anthropic) _anthropic = new Anthropic();
-  return _anthropic;
-}
-
 export async function verifyImage(
-  file: string,
-  image: OcrImage,
+  fileLabel: string,
+  imagePath: string,
+  userInstruction = "",
 ): Promise<VerifiedResult> {
+  const ocrPrompt = buildOcrPrompt(userInstruction);
   const [claudeText, gptText] = await Promise.all([
-    claude.ocr(image, OCR_PROMPT),
-    openai.ocr(image, OCR_PROMPT),
+    claude.ocr(imagePath, ocrPrompt).catch((e) => `[claude error: ${e.message}]`),
+    openai.ocr(imagePath, ocrPrompt).catch((e) => `[gpt error: ${e.message}]`),
   ]);
 
-  const userPrompt = `Файл: ${file}
+  const extraInstruction = userInstruction.trim()
+    ? `\nДополнительные инструкции пользователя (учти при выборе финального текста):\n${userInstruction}\n`
+    : "";
+
+  const verifyPrompt = `Ты редактор-корректор OCR. Тебе дают два независимых распознавания одного изображения от разных моделей. Сравни их и выдай финальный, максимально точный текст, объединив сильные стороны обоих. Не дописывай ничего, чего нет в исходниках.${extraInstruction}
+
+Файл: ${fileLabel}
 
 === Вариант A (Claude) ===
 ${claudeText}
@@ -51,32 +52,19 @@ ${claudeText}
 === Вариант B (GPT) ===
 ${gptText}
 
-Сравни оба варианта, выдай финальный текст и краткие заметки о расхождениях.
 Верни СТРОГО JSON по схеме:
 {
   "final_text": "...",
   "notes": "краткие пометки о расхождениях и решениях",
   "agreement": 0.0
 }
-agreement — оценка совпадения вариантов от 0 до 1.`;
+agreement — оценка совпадения вариантов от 0 до 1. Никаких других полей, никакого текста до или после JSON.`;
 
-  const response = await getAnthropic().messages.create({
-    model: verifyModel,
-    max_tokens: 8192,
-    system: VERIFY_SYSTEM,
-    messages: [{ role: "user", content: userPrompt }],
-  });
-
-  const raw = response.content
-    .filter((b): b is Anthropic.TextBlock => b.type === "text")
-    .map((b) => b.text)
-    .join("\n")
-    .trim();
-
+  const raw = await claudeJson(verifyPrompt);
   const parsed = parseJson(raw);
 
   return {
-    file,
+    file: fileLabel,
     claude: claudeText,
     gpt: gptText,
     final: parsed.final_text,
@@ -94,7 +82,13 @@ function parseJson(raw: string): VerifyResponse {
     return JSON.parse(stripped) as VerifyResponse;
   } catch {
     const match = stripped.match(/\{[\s\S]*\}/);
-    if (match) return JSON.parse(match[0]) as VerifyResponse;
+    if (match) {
+      try {
+        return JSON.parse(match[0]) as VerifyResponse;
+      } catch {
+        /* fall through */
+      }
+    }
     return { final_text: stripped, notes: "JSON parse failed", agreement: 0 };
   }
 }

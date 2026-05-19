@@ -1,18 +1,8 @@
-import { readFile } from "node:fs/promises";
-import { extname } from "node:path";
-import "dotenv/config";
+import { resolve } from "node:path";
 
 import { ClaudeProvider } from "./providers/claude.js";
 import { OpenAIProvider } from "./providers/openai.js";
-import type { OcrProvider, SupportedMediaType } from "./providers/types.js";
-
-const MIME_BY_EXT: Record<string, SupportedMediaType> = {
-  ".jpg": "image/jpeg",
-  ".jpeg": "image/jpeg",
-  ".png": "image/png",
-  ".gif": "image/gif",
-  ".webp": "image/webp",
-};
+import type { OcrProvider } from "./providers/types.js";
 
 const DEFAULT_PROMPT =
   "Extract all text from this image. Preserve layout where it carries meaning (tables, columns, headings). Output plain text only — no commentary.";
@@ -61,6 +51,9 @@ function printHelp(): void {
   console.error(
     `Usage: npm run ocr -- [--provider claude|gpt|both] [--prompt "..."] <image>
 
+Auth: uses locally installed claude / codex CLIs (OAuth via subscription).
+No API keys needed in environment.
+
 Options:
   -p, --provider   claude (default) | gpt | both
       --prompt     custom instruction (default: extract all text)
@@ -74,13 +67,7 @@ function buildProvider(name: "claude" | "gpt"): OcrProvider {
 
 async function main(): Promise<void> {
   const { provider, imagePath, prompt } = parseArgs(process.argv.slice(2));
-
-  const ext = extname(imagePath).toLowerCase();
-  const mediaType = MIME_BY_EXT[ext];
-  if (!mediaType) throw new Error(`Unsupported image extension: ${ext}`);
-
-  const base64 = (await readFile(imagePath)).toString("base64");
-  const image = { base64, mediaType };
+  const absPath = resolve(imagePath);
 
   const providers: OcrProvider[] =
     provider === "both"
@@ -91,7 +78,7 @@ async function main(): Promise<void> {
     if (providers.length > 1) {
       process.stdout.write(`\n=== ${p.name} ===\n`);
     }
-    const text = await p.ocr(image, prompt);
+    const text = await p.ocr(absPath, prompt);
     process.stdout.write(text.trim() + "\n");
   }
 }

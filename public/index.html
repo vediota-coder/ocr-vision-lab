@@ -11,8 +11,9 @@
       <header>
         <h1>OCR Vision Lab</h1>
         <p class="subtitle">
-          Загрузи папку с изображениями — получишь проверенный PDF.
-          Claude + GPT распознают независимо, Claude сверяет результаты.
+          Загрузи папку с изображениями — получишь проверенный документ.
+          Claude + GPT распознают независимо, Claude сверяет результаты,
+          вырезает повторяющийся мусор (колонтитулы, водяные знаки).
         </p>
       </header>
 
@@ -47,8 +48,30 @@
 
           <div id="file-list" class="file-list"></div>
 
+          <div class="row-fields">
+            <label class="field">
+              <span class="field-label">Формат вывода</span>
+              <div class="seg">
+                <input type="radio" name="format" id="fmt-pdf" value="pdf" checked />
+                <label for="fmt-pdf">PDF</label>
+                <input type="radio" name="format" id="fmt-docx" value="docx" />
+                <label for="fmt-docx">Word (.docx)</label>
+              </div>
+            </label>
+          </div>
+
+          <label class="field">
+            <span class="field-label">Дополнительный промпт для AI (необязательно)</span>
+            <textarea
+              id="prompt"
+              name="prompt"
+              rows="4"
+              placeholder="Например: убери повторяющийся колонтитул компании, не включай номера страниц, сохраняй структуру таблиц"
+            ></textarea>
+          </label>
+
           <button type="submit" id="submit-btn" disabled>
-            Распознать и собрать PDF
+            Распознать и собрать документ
           </button>
         </form>
       </section>
@@ -58,7 +81,7 @@
         <div class="progress-bar"><div class="progress-fill" id="bar"></div></div>
         <p id="status">Ожидание…</p>
         <ul id="log" class="log"></ul>
-        <a id="download" class="download" hidden>Скачать PDF</a>
+        <a id="download" class="download" hidden>Скачать документ</a>
       </section>
     </main>
     <script src="/app.js"></script>
