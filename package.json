@@ -1,7 +1,7 @@
 {
   "name": "ocr-vision-lab",
   "version": "0.1.0",
-  "description": "OCR & vision experiments with Claude Vision API",
+  "description": "OCR & vision experiments with Claude Vision and OpenAI Vision",
   "main": "dist/index.js",
   "type": "module",
   "scripts": {
@@ -11,12 +11,13 @@
     "typecheck": "tsc --noEmit",
     "ocr": "tsx src/index.ts"
   },
-  "keywords": ["ocr", "vision", "claude", "anthropic"],
+  "keywords": ["ocr", "vision", "claude", "openai", "gpt", "anthropic"],
   "author": "vediota",
   "license": "MIT",
   "dependencies": {
     "@anthropic-ai/sdk": "^0.32.1",
-    "dotenv": "^16.4.5"
+    "dotenv": "^16.4.5",
+    "openai": "^4.77.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
