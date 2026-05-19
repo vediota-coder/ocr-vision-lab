@@ -1,95 +1,54 @@
-import { claudeJson } from "../providers/claude.js";
 import type { VerifiedResult } from "./verify.js";
 
-interface CleanResponse {
-  cleaned: { final_text: string; removed: string }[];
-  boilerplate: string[];
+const MIN_PAGES_FOR_FILTER = 3;
+const MIN_FREQ_RATIO = 0.2;
+const MIN_LINE_LEN = 2;
+const MAX_LINE_LEN = 160;
+
+function normKey(s: string): string {
+  return s.toLowerCase().replace(/\s+/g, " ").trim();
 }
 
 export async function stripBoilerplate(
   pages: VerifiedResult[],
   userInstruction: string,
 ): Promise<VerifiedResult[]> {
-  if (pages.length <= 1) return pages;
+  if (pages.length < MIN_PAGES_FOR_FILTER) return pages;
 
-  const payload = pages.map((p, i) => ({
-    index: i,
-    file: p.file,
-    text: p.final,
-  }));
-
-  const userPart = userInstruction.trim()
-    ? `\nДополнительные инструкции пользователя:\n${userInstruction}\n`
-    : "";
-
-  const prompt = `Тебе дан массив текстов, распознанных постранично с одного многостраничного документа. Найди ПОВТОРЯЮЩИЕСЯ элементы (колонтитулы, водяные знаки, номера страниц, повторяющиеся реквизиты, рекламные плашки и т.п.), которые встречаются на нескольких страницах и не несут уникального содержания. Удали их из текста каждой страницы. Сохраняй уникальный контент страницы 1:1.${userPart}
-
-Страницы:
-${JSON.stringify(payload, null, 2)}
-
-Верни СТРОГО JSON без обёртки и без комментариев:
-{
-  "boilerplate": ["шаблон1", "шаблон2", ...],
-  "cleaned": [
-    { "final_text": "...", "removed": "что было удалено или пусто" },
-    ...
-  ]
-}
-Массив cleaned должен иметь ту же длину и порядок, что и входные страницы.`;
-
-  let raw: string;
-  try {
-    raw = await claudeJson(prompt);
-  } catch (err) {
-    return pages.map((p) => ({
-      ...p,
-      notes: p.notes
-        ? `${p.notes} | filter failed: ${(err as Error).message}`
-        : `filter failed: ${(err as Error).message}`,
-    }));
+  const lineCounts = new Map<string, number>();
+  for (const p of pages) {
+    const seen = new Set<string>();
+    for (const raw of p.final.split("\n")) {
+      const key = normKey(raw);
+      if (key.length < MIN_LINE_LEN || key.length > MAX_LINE_LEN) continue;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      lineCounts.set(key, (lineCounts.get(key) ?? 0) + 1);
+    }
   }
 
-  const parsed = parseJson(raw);
-  if (!parsed || parsed.cleaned.length !== pages.length) {
-    return pages.map((p) => ({
-      ...p,
-      notes: p.notes ? `${p.notes} | filter: parse failed` : "filter: parse failed",
-    }));
-  }
+  const threshold = Math.max(3, Math.ceil(pages.length * MIN_FREQ_RATIO));
+  const boilerplate = new Set(
+    [...lineCounts.entries()].filter(([, n]) => n >= threshold).map(([s]) => s),
+  );
 
-  const boilerplateNote =
-    parsed.boilerplate.length > 0
-      ? `Удалены повторы: ${parsed.boilerplate.slice(0, 5).join(" · ")}`
+  const note =
+    boilerplate.size > 0
+      ? `Удалено повторов: ${boilerplate.size} строк (порог ${threshold}/${pages.length} страниц)`
       : "";
 
-  return pages.map((p, i) => {
-    const c = parsed.cleaned[i];
-    const removedNote = c.removed && c.removed.trim() ? `Удалено: ${c.removed}` : "";
-    const extra = [boilerplateNote, removedNote].filter(Boolean).join(" | ");
-    return {
-      ...p,
-      final: c.final_text,
-      notes: p.notes && extra ? `${p.notes} | ${extra}` : p.notes || extra,
-    };
-  });
-}
+  const userNote = userInstruction.trim()
+    ? ` · кастомный промпт применён к OCR`
+    : "";
 
-function parseJson(raw: string): CleanResponse | null {
-  const stripped = raw
-    .replace(/^```(?:json)?\s*/i, "")
-    .replace(/\s*```\s*$/i, "")
-    .trim();
-  try {
-    return JSON.parse(stripped) as CleanResponse;
-  } catch {
-    const match = stripped.match(/\{[\s\S]*\}/);
-    if (match) {
-      try {
-        return JSON.parse(match[0]) as CleanResponse;
-      } catch {
-        return null;
-      }
-    }
-    return null;
-  }
+  return pages.map((p) => {
+    const cleaned = p.final
+      .split("\n")
+      .filter((ln) => !boilerplate.has(normKey(ln)))
+      .join("\n")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+    const newNotes = note ? (p.notes ? `${p.notes} | ${note}${userNote}` : `${note}${userNote}`) : p.notes;
+    return { ...p, final: cleaned, notes: newNotes };
+  });
 }

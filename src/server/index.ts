@@ -67,6 +67,7 @@ async function runJob(
   files: UploadedFile[],
   format: OutputFormat,
   userPrompt: string,
+  includeImages: boolean,
 ): Promise<void> {
   const job = jobs.get(jobId)!;
   emit(job, { type: "start", totalPages: files.length });
@@ -118,8 +119,8 @@ async function runJob(
 
     const buffer =
       format === "docx"
-        ? await buildVerifiedDocx(renderPages)
-        : await buildVerifiedPdf(renderPages);
+        ? await buildVerifiedDocx(renderPages, { includeImages })
+        : await buildVerifiedPdf(renderPages, { includeImages });
     job.output = { buffer, format };
     emit(job, { type: "done", jobId });
   } catch (err) {
@@ -148,8 +149,9 @@ app.post("/api/jobs", async (req, reply) => {
   await mkdir(workDir, { recursive: true });
 
   const files: UploadedFile[] = [];
-  let format: OutputFormat = "pdf";
+  let format: OutputFormat = "docx";
   let userPrompt = "";
+  let includeImages = false;
 
   for await (const part of req.parts()) {
     if (part.type === "file") {
@@ -169,6 +171,8 @@ app.post("/api/jobs", async (req, reply) => {
       if (typeof v === "string" && (v === "pdf" || v === "docx")) format = v;
     } else if (part.fieldname === "prompt") {
       if (typeof part.value === "string") userPrompt = part.value;
+    } else if (part.fieldname === "includeImages") {
+      includeImages = part.value === "1" || part.value === "true";
     }
   }
 
@@ -178,7 +182,9 @@ app.post("/api/jobs", async (req, reply) => {
   }
 
   jobs.set(jobId, { events: [], subscribers: new Set(), workDir });
-  runJob(jobId, files, format, userPrompt).catch((e) => app.log.error(e));
+  runJob(jobId, files, format, userPrompt, includeImages).catch((e) =>
+    app.log.error(e),
+  );
 
   return { jobId, total: files.length, format };
 });

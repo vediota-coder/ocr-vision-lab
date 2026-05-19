@@ -86,7 +86,9 @@ form.addEventListener("submit", async (e) => {
   if (selected.length === 0) return;
 
   const format =
-    document.querySelector('input[name="format"]:checked')?.value || "pdf";
+    document.querySelector('input[name="format"]:checked')?.value || "docx";
+  const includeImages =
+    document.querySelector('input[name="images"]:checked')?.value === "1";
   const userPrompt = (promptEl.value || "").trim();
 
   submitBtn.disabled = true;
@@ -98,6 +100,7 @@ form.addEventListener("submit", async (e) => {
 
   const fd = new FormData();
   fd.append("format", format);
+  fd.append("includeImages", includeImages ? "1" : "0");
   if (userPrompt) fd.append("prompt", userPrompt);
   for (const f of selected) fd.append("files", f, f.webkitRelativePath || f.name);
 

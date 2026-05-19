@@ -7,7 +7,15 @@ export interface RenderPage extends VerifiedResult {
   imagePath: string;
 }
 
-export async function buildVerifiedPdf(pages: RenderPage[]): Promise<Buffer> {
+export interface PdfOptions {
+  includeImages?: boolean;
+}
+
+export async function buildVerifiedPdf(
+  pages: RenderPage[],
+  opts: PdfOptions = {},
+): Promise<Buffer> {
+  const { includeImages = true } = opts;
   return new Promise(async (resolve, reject) => {
     const doc = new PDFDocument({
       size: "A4",
@@ -62,6 +70,7 @@ export async function buildVerifiedPdf(pages: RenderPage[]): Promise<Buffer> {
       const textWidth = pageWidth - previewWidth - 16;
 
       try {
+        if (!includeImages) throw new Error("skip-image");
         const buf = await readFile(page.imagePath);
         doc.image(buf, previewX, previewY, {
           fit: [previewWidth, 220],

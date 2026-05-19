@@ -52,10 +52,19 @@
             <label class="field">
               <span class="field-label">Формат вывода</span>
               <div class="seg">
-                <input type="radio" name="format" id="fmt-pdf" value="pdf" checked />
+                <input type="radio" name="format" id="fmt-pdf" value="pdf" />
                 <label for="fmt-pdf">PDF</label>
-                <input type="radio" name="format" id="fmt-docx" value="docx" />
+                <input type="radio" name="format" id="fmt-docx" value="docx" checked />
                 <label for="fmt-docx">Word (.docx)</label>
+              </div>
+            </label>
+            <label class="field">
+              <span class="field-label">Изображения в документе</span>
+              <div class="seg">
+                <input type="radio" name="images" id="img-no" value="0" checked />
+                <label for="img-no">Без</label>
+                <input type="radio" name="images" id="img-yes" value="1" />
+                <label for="img-yes">С превью</label>
               </div>
             </label>
           </div>
